@@ -1,0 +1,635 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+##加载所需包
+```{r}
+library(dplyr)
+library(TwoSampleMR)
+library(ieugwasr)
+library(VariantAnnotation)
+library(gwasglue)
+library(vroom)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(FastAuthR)
+library(FastGWASR)
+library(openxlsx)
+library(FastTraitR)
+library(MRPRESSO)
+setwd("")
+Sys.setenv(OPENGWAS_JWT="")
+```
+
+
+## 本地初步计算结果(正向)
+```{r}
+exposure_data <- fread("")
+exposure_data <- exposure_data%>%
+  dplyr::rename(beta.exposure=BETA,
+                se.exposure=SE,
+                pval.exposure=P,
+                eaf.exposure=EAF,
+              effect_allele.exposure=EA,
+                other_allele.exposure=NEA) %>%
+  dplyr::filter(pval.exposure < 5e-08)
+exposure_data <- exposure_data %>%
+  dplyr::select(SNP,beta.exposure,se.exposure,pval.exposure,eaf.exposure,effect_allele.exposure,other_allele.exposure)
+exposure_data$exposure <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- exposure_data$exposure
+exposure_data$samplesize.exposure <- 6389
+expo_clump <- ieugwasr::ld_clump(dplyr::tibble(rsid=exposure_data$SNP, pval=exposure_data$pval.exposure),
+                         clump_r2 = 0.001,
+                         clump_p = 1,
+                         clump_kb = 10000,
+                         plink_bin = plinkbinr::get_plink_exe(),
+                         bfile = "G:/Science/MR/TWOsamole/learning/clump/1kg.v3/EUR",pop = "EUR")
+
+
+exposure_data <- exposure_data%>%
+  dplyr::filter(SNP%in%expo_clump$rsid)
+dat <- exposure_data
+dat$beta.exposure <- as.numeric(dat$beta.exposure)
+dat$se.exposure <- as.numeric(dat$se.exposure)
+dat$eaf.exposure<- as.numeric(dat$eaf.exposure)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))     #????R2
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2) 
+outTab_F=dat[as.numeric(dat$F)>10,]
+exposure_dat <- outTab_F
+snp_MS <- extract_outcome_data(snps =exposure_dat$SNP,outcomes = "ieu-b-2",proxies = F)
+snp_MS$outcome <- "Alzheimer's disease"
+snp_MS$"id.outcome" <- "Alzheimer's disease"
+dat_harmed=harmonise_data(exposure_dat, snp_MS)
+dat_harmed=dat_harmed[as.numeric(dat_harmed$pval.outcome)>5e-08,]
+outTab_mr=dat_harmed[dat_harmed$mr_keep=="TRUE",]
+
+rownames(outTab_mr) <- NULL
+##去除离群值之前进行MR
+mrResult =mr(outTab_mr)
+View(mrResult)
+```
+##输出结果及画图
+```{r}
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="", row.names=F)
+#异质性检测
+heterTab=mr_heterogeneity(outTab_mr)
+write.csv(heterTab, file= "", row.names=F)
+##水平多效性检验
+pleioTab=mr_pleiotropy_test(outTab_mr)
+write.csv(pleioTab, file="", row.names=F)
+##绘制散点图
+p1=mr_scatter_plot(mrResult,outTab_mr)
+png(filename="",width=1500,height=1200,res=300)
+print(p1)
+dev.off()
+#美观森林图绘制
+library("readxl")
+bc <- read.csv("")
+library(stringr)
+names(bc)
+##########
+library(grid)
+library(forestploter)
+bc$hi<-as.numeric(bc$or_uci95)
+bc$low <-as.numeric(bc$or_lci95)
+########
+bc$pval <- ifelse(is.na(bc$pval), "", bc$pval)
+########生成一个变量se，它在绘图的时候表示正方形的大小
+bc$se <- (log(as.numeric(bc$hi)) - log(as.numeric(bc$or)))/1.96
+########
+bc$""<- paste(rep(" ", 20), collapse = " ")
+########
+bc$`OR (95% CI)` <- ifelse(is.na(bc$se), "",
+                           sprintf("%.2f (%.2f to %.2f)",
+                                     bc$or, bc$low, bc$hi))#sprintF返回字符和可变量组合
+str(bc)
+bc$se<-round(as.numeric(bc$se),3)
+bc$se<- ifelse(is.na(bc$se), "", bc$se)
+bc$se <- as.numeric(bc$se)
+###########3
+##############3成功
+P <-forest(bc[,c(4,3,5,6,17,18,9)],
+       est = bc$or,       #效应值
+       lower = bc$low,     #可信区间下限
+       upper = bc$hi,      #可信区间上限
+       sizes = 0.3,
+       ci_column = 5,   #在那一列画森林图，要选空的那一列
+       ref_line = 1,
+       arrow_lab = c("Protective factor","Risk factor"),
+       xlim = c(0, 2),
+       ticks_at = c(0,0.5,1,1.5,2))
+P
+png(filename="",width=3500,height=1800,res=300)
+print(P)
+dev.off()
+
+#########
+##漏斗图
+res_single <- mr_singlesnp(outTab_mr)
+p3=mr_funnel_plot(singlesnp_results = res_single)
+png(filename="",width=2800,height=1200,res=300)
+print(p3)
+dev.off()
+
+##留一法敏感性分析
+p4=mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(outTab_mr))
+  png(filename="",width=1500,height=1200,res=300)
+print(p4)
+dev.off()
+```
+## 本地初步计算结果(正向)
+```{r}
+exposure_data <- fread("")
+exposure_data <- exposure_data%>%
+  dplyr::rename(beta.exposure=BETA,
+                se.exposure=SE,
+                pval.exposure=P,
+                eaf.exposure=EAF,
+              effect_allele.exposure=EA,
+                other_allele.exposure=NEA) %>%
+  dplyr::filter(pval.exposure < 5e-08)
+exposure_data <- exposure_data %>%
+  dplyr::select(SNP,beta.exposure,se.exposure,pval.exposure,eaf.exposure,effect_allele.exposure,other_allele.exposure)
+exposure_data$exposure <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- exposure_data$exposure
+exposure_data$samplesize.exposure <- 6389
+expo_clump <- ieugwasr::ld_clump(dplyr::tibble(rsid=exposure_data$SNP, pval=exposure_data$pval.exposure),
+                         clump_r2 = 0.001,
+                         clump_p = 1,
+                         clump_kb = 10000,
+                         plink_bin = plinkbinr::get_plink_exe(),
+                         bfile = "G:/Science/MR/TWOsamole/learning/clump/1kg.v3/EUR",pop = "EUR")
+
+
+exposure_data <- exposure_data%>%
+  dplyr::filter(SNP%in%expo_clump$rsid)
+dat <- exposure_data
+dat$beta.exposure <- as.numeric(dat$beta.exposure)
+dat$se.exposure <- as.numeric(dat$se.exposure)
+dat$eaf.exposure<- as.numeric(dat$eaf.exposure)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))     #????R2
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2) 
+outTab_F=dat[as.numeric(dat$F)>10,]
+exposure_dat <- outTab_F
+snp_MS <- extract_outcome_data(snps =exposure_dat$SNP,outcomes = "ieu-b-43",proxies = T)
+snp_MS$outcome <- "frontotemporal dementia"
+snp_MS$"id.outcome" <- "frontotemporal dementia"
+dat_harmed=harmonise_data(exposure_dat, snp_MS)
+dat_harmed=dat_harmed[as.numeric(dat_harmed$pval.outcome)>5e-08,]
+outTab_mr=dat_harmed[dat_harmed$mr_keep=="TRUE",]
+
+rownames(outTab_mr) <- NULL
+##去除离群值之前进行MR
+mrResult =mr(outTab_mr)
+View(mrResult)
+```
+##输出结果及画图
+```{r}
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="", row.names=F)
+#异质性检测
+heterTab=mr_heterogeneity(outTab_mr)
+write.csv(heterTab, file= "", row.names=F)
+##水平多效性检验
+pleioTab=mr_pleiotropy_test(outTab_mr)
+write.csv(pleioTab, file="", row.names=F)
+##绘制散点图
+p1=mr_scatter_plot(mrResult,outTab_mr)
+png(filename="",width=1500,height=1200,res=300)
+print(p1)
+dev.off()
+#美观森林图绘制
+library("readxl")
+bc <- read.csv("")
+library(stringr)
+names(bc)
+##########
+library(grid)
+library(forestploter)
+bc$hi<-as.numeric(bc$or_uci95)
+bc$low <-as.numeric(bc$or_lci95)
+########
+bc$pval <- ifelse(is.na(bc$pval), "", bc$pval)
+########生成一个变量se，它在绘图的时候表示正方形的大小
+bc$se <- (log(as.numeric(bc$hi)) - log(as.numeric(bc$or)))/1.96
+########
+bc$""<- paste(rep(" ", 20), collapse = " ")
+########
+bc$`OR (95% CI)` <- ifelse(is.na(bc$se), "",
+                           sprintf("%.2f (%.2f to %.2f)",
+                                     bc$or, bc$low, bc$hi))#sprintF返回字符和可变量组合
+str(bc)
+bc$se<-round(as.numeric(bc$se),3)
+bc$se<- ifelse(is.na(bc$se), "", bc$se)
+bc$se <- as.numeric(bc$se)
+###########3
+##############3成功
+P <-forest(bc[,c(4,3,5,6,17,18,9)],
+       est = bc$or,       #效应值
+       lower = bc$low,     #可信区间下限
+       upper = bc$hi,      #可信区间上限
+       sizes = 0.3,
+       ci_column = 5,   #在那一列画森林图，要选空的那一列
+       ref_line = 1,
+       arrow_lab = c("Protective factor","Risk factor"),
+       xlim = c(0, 2),
+       ticks_at = c(0,0.5,1,1.5,2))
+P
+png(filename="",width=3500,height=1800,res=300)
+print(P)
+dev.off()
+
+#########
+##漏斗图
+res_single <- mr_singlesnp(outTab_mr)
+p3=mr_funnel_plot(singlesnp_results = res_single)
+png(filename="",width=2800,height=1200,res=300)
+print(p3)
+dev.off()
+
+##留一法敏感性分析
+p4=mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(outTab_mr))
+  png(filename="",width=1500,height=1200,res=300)
+print(p4)
+dev.off()
+```
+
+
+## 本地初步计算结果(正向)
+```{r}
+exposure_data <- fread("")
+exposure_data <- exposure_data%>%
+  dplyr::rename(beta.exposure=BETA,
+                se.exposure=SE,
+                pval.exposure=P,
+                eaf.exposure=EAF,
+              effect_allele.exposure=EA,
+                other_allele.exposure=NEA) %>%
+  dplyr::filter(pval.exposure < 5e-08)
+exposure_data <- exposure_data %>%
+  dplyr::select(SNP,beta.exposure,se.exposure,pval.exposure,eaf.exposure,effect_allele.exposure,other_allele.exposure)
+exposure_data$exposure <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- exposure_data$exposure
+exposure_data$samplesize.exposure <- 6389
+expo_clump <- ieugwasr::ld_clump(dplyr::tibble(rsid=exposure_data$SNP, pval=exposure_data$pval.exposure),
+                         clump_r2 = 0.001,
+                         clump_p = 1,
+                         clump_kb = 10000,
+                         plink_bin = plinkbinr::get_plink_exe(),
+                         bfile = "G:/Science/MR/TWOsamole/learning/clump/1kg.v3/EUR",pop = "EUR")
+
+
+exposure_data <- exposure_data%>%
+  dplyr::filter(SNP%in%expo_clump$rsid)
+dat <- exposure_data
+dat$beta.exposure <- as.numeric(dat$beta.exposure)
+dat$se.exposure <- as.numeric(dat$se.exposure)
+dat$eaf.exposure<- as.numeric(dat$eaf.exposure)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))     #????R2
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2) 
+outTab_F=dat[as.numeric(dat$F)>10,]
+exposure_dat <- outTab_F
+snp_MS <- extract_outcome_data(snps =exposure_dat$SNP,outcomes = "ukb-b-14699",proxies = T)
+snp_MS$outcome <- "Illnesses of mother: Alzheimer's disease"
+snp_MS$"id.outcome" <- "Illnesses of mother: Alzheimer's disease"
+dat_harmed=harmonise_data(exposure_dat, snp_MS)
+dat_harmed=dat_harmed[as.numeric(dat_harmed$pval.outcome)>5e-08,]
+outTab_mr=dat_harmed[dat_harmed$mr_keep=="TRUE",]
+
+rownames(outTab_mr) <- NULL
+##去除离群值之前进行MR
+mrResult =mr(outTab_mr)
+View(mrResult)
+```
+##输出结果及画图
+```{r}
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="", row.names=F)
+#异质性检测
+heterTab=mr_heterogeneity(outTab_mr)
+write.csv(heterTab, file= "", row.names=F)
+##水平多效性检验
+pleioTab=mr_pleiotropy_test(outTab_mr)
+write.csv(pleioTab, file="", row.names=F)
+##绘制散点图
+p1=mr_scatter_plot(mrResult,outTab_mr)
+png(filename="",width=1500,height=1200,res=300)
+print(p1)
+dev.off()
+#美观森林图绘制
+library("readxl")
+bc <- read.csv("")
+library(stringr)
+names(bc)
+##########
+library(grid)
+library(forestploter)
+bc$hi<-as.numeric(bc$or_uci95)
+bc$low <-as.numeric(bc$or_lci95)
+########
+bc$pval <- ifelse(is.na(bc$pval), "", bc$pval)
+########生成一个变量se，它在绘图的时候表示正方形的大小
+bc$se <- (log(as.numeric(bc$hi)) - log(as.numeric(bc$or)))/1.96
+########
+bc$""<- paste(rep(" ", 20), collapse = " ")
+########
+bc$`OR (95% CI)` <- ifelse(is.na(bc$se), "",
+                           sprintf("%.2f (%.2f to %.2f)",
+                                     bc$or, bc$low, bc$hi))#sprintF返回字符和可变量组合
+str(bc)
+bc$se<-round(as.numeric(bc$se),3)
+bc$se<- ifelse(is.na(bc$se), "", bc$se)
+bc$se <- as.numeric(bc$se)
+###########3
+##############3成功
+P <-forest(bc[,c(4,3,5,6,17,18,9)],
+       est = bc$or,       #效应值
+       lower = bc$low,     #可信区间下限
+       upper = bc$hi,      #可信区间上限
+       sizes = 0.3,
+       ci_column = 5,   #在那一列画森林图，要选空的那一列
+       ref_line = 1,
+       arrow_lab = c("Protective factor","Risk factor"),
+       xlim = c(0, 2),
+       ticks_at = c(0,0.5,1,1.5,2))
+P
+png(filename="",width=3500,height=1800,res=300)
+print(P)
+dev.off()
+
+#########
+##漏斗图
+res_single <- mr_singlesnp(outTab_mr)
+p3=mr_funnel_plot(singlesnp_results = res_single)
+png(filename="",width=2800,height=1200,res=300)
+print(p3)
+dev.off()
+
+##留一法敏感性分析
+p4=mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(outTab_mr))
+  png(filename="",width=1500,height=1200,res=300)
+print(p4)
+dev.off()
+```
+
+
+## 本地初步计算结果(正向)
+```{r}
+exposure_data <- fread("")
+exposure_data <- exposure_data%>%
+  dplyr::rename(beta.exposure=BETA,
+                se.exposure=SE,
+                pval.exposure=P,
+                eaf.exposure=EAF,
+              effect_allele.exposure=EA,
+                other_allele.exposure=NEA) %>%
+  dplyr::filter(pval.exposure < 5e-08)
+exposure_data <- exposure_data %>%
+  dplyr::select(SNP,beta.exposure,se.exposure,pval.exposure,eaf.exposure,effect_allele.exposure,other_allele.exposure)
+exposure_data$exposure <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- exposure_data$exposure
+exposure_data$samplesize.exposure <- 6389
+expo_clump <- ieugwasr::ld_clump(dplyr::tibble(rsid=exposure_data$SNP, pval=exposure_data$pval.exposure),
+                         clump_r2 = 0.001,
+                         clump_p = 1,
+                         clump_kb = 10000,
+                         plink_bin = plinkbinr::get_plink_exe(),
+                         bfile = "G:/Science/MR/TWOsamole/learning/clump/1kg.v3/EUR",pop = "EUR")
+
+
+exposure_data <- exposure_data%>%
+  dplyr::filter(SNP%in%expo_clump$rsid)
+dat <- exposure_data
+dat$beta.exposure <- as.numeric(dat$beta.exposure)
+dat$se.exposure <- as.numeric(dat$se.exposure)
+dat$eaf.exposure<- as.numeric(dat$eaf.exposure)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))     #????R2
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2) 
+outTab_F=dat[as.numeric(dat$F)>10,]
+exposure_dat <- outTab_F
+snp_MS <- extract_outcome_data(snps =exposure_dat$SNP,outcomes = "ukb-b-323",proxies = T)
+snp_MS$outcome <- "Illnesses of father: Alzheimer's disease"
+snp_MS$"id.outcome" <- "Illnesses of father: Alzheimer's disease"
+dat_harmed=harmonise_data(exposure_dat, snp_MS)
+dat_harmed=dat_harmed[as.numeric(dat_harmed$pval.outcome)>5e-08,]
+outTab_mr=dat_harmed[dat_harmed$mr_keep=="TRUE",]
+
+rownames(outTab_mr) <- NULL
+##去除离群值之前进行MR
+mrResult =mr(outTab_mr)
+View(mrResult)
+```
+##输出结果及画图
+```{r}
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="", row.names=F)
+#异质性检测
+heterTab=mr_heterogeneity(outTab_mr)
+write.csv(heterTab, file= "", row.names=F)
+##水平多效性检验
+pleioTab=mr_pleiotropy_test(outTab_mr)
+write.csv(pleioTab, file="", row.names=F)
+##绘制散点图
+p1=mr_scatter_plot(mrResult,outTab_mr)
+png(filename="",width=1500,height=1200,res=300)
+print(p1)
+dev.off()
+#美观森林图绘制
+library("readxl")
+bc <- read.csv("")
+library(stringr)
+names(bc)
+##########
+library(grid)
+library(forestploter)
+bc$hi<-as.numeric(bc$or_uci95)
+bc$low <-as.numeric(bc$or_lci95)
+########
+bc$pval <- ifelse(is.na(bc$pval), "", bc$pval)
+########生成一个变量se，它在绘图的时候表示正方形的大小
+bc$se <- (log(as.numeric(bc$hi)) - log(as.numeric(bc$or)))/1.96
+########
+bc$""<- paste(rep(" ", 20), collapse = " ")
+########
+bc$`OR (95% CI)` <- ifelse(is.na(bc$se), "",
+                           sprintf("%.2f (%.2f to %.2f)",
+                                     bc$or, bc$low, bc$hi))#sprintF返回字符和可变量组合
+str(bc)
+bc$se<-round(as.numeric(bc$se),3)
+bc$se<- ifelse(is.na(bc$se), "", bc$se)
+bc$se <- as.numeric(bc$se)
+###########3
+##############3成功
+P <-forest(bc[,c(4,3,5,6,17,18,9)],
+       est = bc$or,       #效应值
+       lower = bc$low,     #可信区间下限
+       upper = bc$hi,      #可信区间上限
+       sizes = 0.3,
+       ci_column = 5,   #在那一列画森林图，要选空的那一列
+       ref_line = 1,
+       arrow_lab = c("Protective factor","Risk factor"),
+       xlim = c(0, 2),
+       ticks_at = c(0,0.5,1,1.5,2))
+P
+png(filename="",width=3500,height=1800,res=300)
+print(P)
+dev.off()
+
+#########
+##漏斗图
+res_single <- mr_singlesnp(outTab_mr)
+p3=mr_funnel_plot(singlesnp_results = res_single)
+png(filename="",width=2800,height=1200,res=300)
+print(p3)
+dev.off()
+
+##留一法敏感性分析
+p4=mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(outTab_mr))
+  png(filename="",width=1500,height=1200,res=300)
+print(p4)
+dev.off()
+```
+
+
+## 本地初步计算结果(正向)
+```{r}
+exposure_data <- fread("")
+exposure_data <- exposure_data%>%
+  dplyr::rename(beta.exposure=BETA,
+                se.exposure=SE,
+                pval.exposure=P,
+                eaf.exposure=EAF,
+              effect_allele.exposure=EA,
+                other_allele.exposure=NEA) %>%
+  dplyr::filter(pval.exposure < 5e-08)
+exposure_data <- exposure_data %>%
+  dplyr::select(SNP,beta.exposure,se.exposure,pval.exposure,eaf.exposure,effect_allele.exposure,other_allele.exposure)
+exposure_data$exposure <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- "gestational blood glucose measurement"
+exposure_data$"id.exposure" <- exposure_data$exposure
+exposure_data$samplesize.exposure <- 6389
+expo_clump <- ieugwasr::ld_clump(dplyr::tibble(rsid=exposure_data$SNP, pval=exposure_data$pval.exposure),
+                         clump_r2 = 0.001,
+                         clump_p = 1,
+                         clump_kb = 10000,
+                         plink_bin = plinkbinr::get_plink_exe(),
+                         bfile = "G:/Science/MR/TWOsamole/learning/clump/1kg.v3/EUR",pop = "EUR")
+
+
+exposure_data <- exposure_data%>%
+  dplyr::filter(SNP%in%expo_clump$rsid)
+dat <- exposure_data
+dat$beta.exposure <- as.numeric(dat$beta.exposure)
+dat$se.exposure <- as.numeric(dat$se.exposure)
+dat$eaf.exposure<- as.numeric(dat$eaf.exposure)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))     #????R2
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2) 
+outTab_F=dat[as.numeric(dat$F)>10,]
+exposure_dat <- outTab_F
+snp_MS <- fread("")
+snp_MS <- snp_MS %>%
+  dplyr::rename(SNP = "variant_id")
+a <- intersect(exposure_dat$SNP,snp_MS$SNP)
+exposure_dat <- exposure_dat%>%
+  dplyr::filter(SNP%in%a)%>%
+  distinct(SNP,.keep_all = T)
+
+exposure_dat$"id.exposure" <- exposure_dat$exposure
+snp_MS <- snp_MS%>%
+  dplyr::filter(SNP %in% a)%>%
+  distinct(SNP,.keep_all = T)
+
+snp_MS <- snp_MS%>%
+  dplyr::mutate("id.outcome"="Lewy body dementia",
+                outcome="Lewy body dementia")%>%
+  dplyr::rename(beta.outcome=beta,
+                  se.outcome=standard_error,
+                pval.outcome=p_value,
+                eaf.outcome=effect_allele_frequency,
+                effect_allele.outcome=effect_allele,
+                other_allele.outcome=other_allele)
+dat_harmed=harmonise_data(exposure_dat, snp_MS)
+dat_harmed=dat_harmed[as.numeric(dat_harmed$pval.outcome)>5e-08,]
+outTab_mr=dat_harmed[dat_harmed$mr_keep=="TRUE",]
+
+rownames(outTab_mr) <- NULL
+##去除离群值之前进行MR
+mrResult =mr(outTab_mr)
+View(mrResult)
+```
+##输出结果及画图
+```{r}
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="", row.names=F)
+#异质性检测
+heterTab=mr_heterogeneity(outTab_mr)
+write.csv(heterTab, file= "", row.names=F)
+##水平多效性检验
+pleioTab=mr_pleiotropy_test(outTab_mr)
+write.csv(pleioTab, file="", row.names=F)
+##绘制散点图
+p1=mr_scatter_plot(mrResult,outTab_mr)
+png(filename="",width=1500,height=1200,res=300)
+print(p1)
+dev.off()
+#美观森林图绘制
+library("readxl")
+bc <- read.csv("")
+library(stringr)
+names(bc)
+##########
+library(grid)
+library(forestploter)
+bc$hi<-as.numeric(bc$or_uci95)
+bc$low <-as.numeric(bc$or_lci95)
+########
+bc$pval <- ifelse(is.na(bc$pval), "", bc$pval)
+########生成一个变量se，它在绘图的时候表示正方形的大小
+bc$se <- (log(as.numeric(bc$hi)) - log(as.numeric(bc$or)))/1.96
+########
+bc$""<- paste(rep(" ", 20), collapse = " ")
+########
+bc$`OR (95% CI)` <- ifelse(is.na(bc$se), "",
+                           sprintf("%.2f (%.2f to %.2f)",
+                                     bc$or, bc$low, bc$hi))#sprintF返回字符和可变量组合
+str(bc)
+bc$se<-round(as.numeric(bc$se),3)
+bc$se<- ifelse(is.na(bc$se), "", bc$se)
+bc$se <- as.numeric(bc$se)
+###########3
+##############3成功
+P <-forest(bc[,c(4,3,5,6,17,18,9)],
+       est = bc$or,       #效应值
+       lower = bc$low,     #可信区间下限
+       upper = bc$hi,      #可信区间上限
+       sizes = 0.3,
+       ci_column = 5,   #在那一列画森林图，要选空的那一列
+       ref_line = 1,
+       arrow_lab = c("Protective factor","Risk factor"),
+       xlim = c(0, 2),
+       ticks_at = c(0,0.5,1,1.5,2))
+P
+png(filename="",width=3500,height=1800,res=300)
+print(P)
+dev.off()
+
+#########
+##漏斗图
+res_single <- mr_singlesnp(outTab_mr)
+p3=mr_funnel_plot(singlesnp_results = res_single)
+png(filename="",width=2800,height=1200,res=300)
+print(p3)
+dev.off()
+
+##留一法敏感性分析
+p4=mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(outTab_mr))
+  png(filename="",width=1500,height=1200,res=300)
+print(p4)
+dev.off()
+```
